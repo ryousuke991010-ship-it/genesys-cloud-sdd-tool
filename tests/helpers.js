@@ -30,7 +30,8 @@ async function launch() {
   const port = await freePort();
   const server = spawn('python3', ['-m', 'http.server', String(port), '--bind', '127.0.0.1', '--directory', ROOT], { stdio: 'ignore' });
   await waitPort(port);
-  const browser = await chromium.launch();
+  // 本物のChromium(新ヘッドレス)で動かす。軽量版(headless shell)はフォルダ保存のテストで落ちるため
+  const browser = await chromium.launch({ channel: 'chromium' });
   const page = await browser.newPage({ viewport: { width: 1360, height: 900 } });
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
