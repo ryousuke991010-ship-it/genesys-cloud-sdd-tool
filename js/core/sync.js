@@ -63,8 +63,12 @@ function parseFile(text) {
 }
 
 /* ---------- PCのフォルダ ---------- */
+let folderHandle = null; // 一度選んだ・読み込んだフォルダはメモリに持ち、毎回データベースから読み直さない
 const folder = {
-  async handle() { return getMeta('folderHandle'); },
+  async handle() {
+    if (!folderHandle) folderHandle = (await getMeta('folderHandle')) || null;
+    return folderHandle;
+  },
   async permission(h, ask) {
     if (!h) return 'none';
     if (typeof h.queryPermission !== 'function') return 'granted';
@@ -76,6 +80,7 @@ const folder = {
   async pick() {
     const h = await window.showDirectoryPicker({ id: 'gc-sdd', mode: 'readwrite' });
     await setMeta('folderHandle', h);
+    folderHandle = h;
     return h;
   },
   async write(project) {
