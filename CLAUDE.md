@@ -20,3 +20,9 @@ UIの作法は `genesys-cloud-tool` を参考にしているが、別アプリ�
 ## テスト
 push前に `NODE_PATH=/opt/node22/lib/node_modules node tests/run-all.js` を全件通す。
 Genesys・各AIのAPIは `page.route()` でモックする(`tests/helpers.js` の `mockGenesys` がメモリ上で組織を再現する)。新しい工程・書き込み処理には専用のspecを追加する。
+
+## 継続的な改善
+- 改善の候補は `ROADMAP.md`(上から優先)と GitHub Issues。終わったら ROADMAP の「済み」に日付つきで移す。
+- 自動テストは GitHub Actions(`.github/workflows/test.yml`)が push・プルリクエストごとに実行する。Playwright のバージョンはこの環境の `/opt/node22/lib/node_modules/playwright` に合わせる。
+- 夜間改善ジョブ(毎日04:10 JST、スケジュール実行)は開発ブランチ `claude/genesys-multi-ai-integration-4l07o8` にだけpushし、**`main` には反映しない**(反映は利用者が明示した時だけ)。1晩1件、テストが壊れていればその修正を最優先にする。
+- 「実組織での確認待ち」の項目は推測で直さない。利用者が実組織で試した結果を受けて対話セッションで直す。
