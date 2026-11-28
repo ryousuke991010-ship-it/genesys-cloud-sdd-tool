@@ -26,6 +26,7 @@ async function launch() {
   const server = await startServer();
   const { port } = server.address();
   const browser = await chromium.launch();
+  browser.on('disconnected', () => console.error('  [browser disconnected]'));
   const page = await browser.newPage({ viewport: { width: 1360, height: 900 } });
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));

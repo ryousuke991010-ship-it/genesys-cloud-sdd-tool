@@ -122,8 +122,14 @@ exports.run = async () => {
       return steps.join(' > ');
     });
     console.log(`    folder probe: ${probe}`);
+    const step = msg => console.log(`    folder step: ${msg}`);
+    step('click pickFolder');
     await page.click('#pickFolder');
+    step('clicked');
+    await page.waitForSelector('#storageConfig strong');
+    step(`folder label: ${await page.textContent('#storageConfig strong')}`);
     await page.waitForFunction(() => !document.querySelector('#storageApply').disabled);
+    step('apply enabled');
     await page.click('#storageApply');
     await page.click('.modal [data-act="ok"]');
     await page.waitForSelector('text=件を取り込み');
