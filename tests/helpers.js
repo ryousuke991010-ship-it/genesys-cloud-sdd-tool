@@ -1,43 +1,38 @@
 /* テスト共通: 静的サーバーを立て、Genesys Cloud・各AIのAPIをpage.route()でモックする */
 const { chromium } = require('playwright');
-const { spawn } = require('child_process');
-const net = require('net');
+const http = require('http');
+const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.md': 'text/markdown; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png' };
 
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const s = net.createServer();
-    s.on('error', reject);
-    s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); });
+/** 静的ファイルを配るだけのサーバー(依存なし。ROOTの外は返さない) */
+function startServer() {
+  const server = http.createServer((req, res) => {
+    let rel = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+    if (rel.endsWith('/')) rel += 'index.html';
+    const file = path.join(ROOT, rel);
+    if (!file.startsWith(ROOT + path.sep)) { res.writeHead(403).end(); return; }
+    fs.readFile(file, (err, data) => {
+      if (err) { res.writeHead(404).end('not found'); return; }
+      res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream' }).end(data);
+    });
   });
-}
-
-function waitPort(port, ms = 10000) {
-  const end = Date.now() + ms;
-  return new Promise((resolve, reject) => {
-    const tryOnce = () => {
-      const sock = net.connect(port, '127.0.0.1');
-      sock.once('connect', () => { sock.destroy(); resolve(); });
-      sock.once('error', () => { sock.destroy(); Date.now() > end ? reject(new Error('server did not start')) : setTimeout(tryOnce, 100); });
-    };
-    tryOnce();
-  });
+  return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)));
 }
 
 async function launch() {
-  const port = await freePort();
-  const server = spawn('python3', ['-m', 'http.server', String(port), '--bind', '127.0.0.1', '--directory', ROOT], { stdio: 'ignore' });
-  await waitPort(port);
-  // 本物のChromium(新ヘッドレス)で動かす。軽量版(headless shell)はフォルダ保存のテストで落ちるため
-  const browser = await chromium.launch({ channel: 'chromium' });
+  const server = await startServer();
+  const { port } = server.address();
+  const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1360, height: 900 } });
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+  page.on('crash', () => { console.error(`  [page crashed] ${page.url()}`); });
   page.on('dialog', d => d.accept('手動シナリオ'));
-  const close = async () => { await browser.close(); server.kill(); };
+  const close = async () => { await browser.close(); server.close(); };
   return { page, url: `http://127.0.0.1:${port}/`, errors, close };
 }
 

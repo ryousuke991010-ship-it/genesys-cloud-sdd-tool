@@ -111,6 +111,17 @@ exports.run = async () => {
     await page.waitForSelector('#storageCard');
     await page.evaluate(() => { window.showDirectoryPicker = async () => navigator.storage.getDirectory(); });
     await page.check('[name="storageMode"][value="folder"]');
+    // どの段階で失敗したか分かるよう、フォルダの取得と保存を1段ずつ確かめる
+    const probe = await page.evaluate(async () => {
+      const steps = [];
+      try {
+        const dir = await navigator.storage.getDirectory(); steps.push('getDirectory');
+        await new Promise((res, rej) => { const r = indexedDB.open('probe'); r.onupgradeneeded = () => r.result.createObjectStore('s'); r.onsuccess = () => { const t = r.result.transaction('s', 'readwrite'); t.objectStore('s').put(dir, 'h'); t.oncomplete = res; t.onerror = () => rej(t.error); }; r.onerror = () => rej(r.error); });
+        steps.push('idb-put');
+      } catch (e) { steps.push(`error: ${e.name} ${e.message}`); }
+      return steps.join(' > ');
+    });
+    console.log(`    folder probe: ${probe}`);
     await page.click('#pickFolder');
     await page.waitForFunction(() => !document.querySelector('#storageApply').disabled);
     await page.click('#storageApply');
