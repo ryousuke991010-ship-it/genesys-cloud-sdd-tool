@@ -6,12 +6,14 @@ import { escapeHtml, formatDateTime, newId, toast } from '../core/ui.js';
 import { navigate, hooks } from '../core/appState.js';
 import { PHASES } from './phases.js';
 import { SKILLS, MANUAL_ONLY } from '../sdd/skills.js';
+import { storageSettings } from '../core/sync.js';
 
 export async function renderHome(container) {
   const projects = await listProjects();
   const settings = loadSettings();
   const ais = configuredProviders(settings);
   const gc = getAuthState();
+  const storage = storageSettings().mode;
 
   const step = (done, title, body, action) => `
     <li class="setup-step ${done ? 'done' : ''}">
@@ -29,11 +31,12 @@ export async function renderHome(container) {
       <div class="phase-strip" aria-hidden="true">${PHASES.map(p => `<span class="phase-chip"><span>${p.icon}</span>${p.label}</span>`).join('<span class="phase-arrow">→</span>')}</div>
     </section>
 
-    ${(!ais.length || !gc.connected) ? `
+    ${(!ais.length || !gc.connected || storage === 'browser') ? `
     <section class="card">
       <h2 class="card-title">はじめに</h2>
       <ol class="setup-list">
         ${step(ais.length > 0, 'AIを接続する', 'Claude・ChatGPT・Geminiのうち使うもののAPIキーを登録します(キーはこの端末だけに保存)。', '<a class="btn btn-small" href="#/settings">設定へ</a>')}
+        ${step(storage !== 'browser', 'データの保存先を決める(おすすめ: GitHub)', '会話や設計書を自分のGitHubリポジトリに保存すると、履歴が残り、別のPCやチームでも続きから作業できます。今はこのブラウザの中だけに保存されています。', '<a class="btn btn-small btn-ghost" href="#/settings">保存先を設定</a>')}
         ${step(gc.connected, 'Genesys Cloudに接続する', 'ご自身のGenesys Cloudアカウントでログインします。ヒアリングと設計だけなら未接続でも進められます。', '<a class="btn btn-small btn-ghost" href="#/settings">接続方法</a>')}
       </ol>
     </section>` : ''}

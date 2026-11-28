@@ -5,7 +5,7 @@
 UIの作法は `genesys-cloud-tool` を参考にしているが、別アプリ。
 
 ## 原則
-- **サーバー・DBを持たない**。ログインはGenesys(OAuth PKCE)、AIキーは利用者の端末、プロジェクトはIndexedDB。運営側にデータを持たせる変更をしない。
+- **サーバー・DBを持たない**。ログインはGenesys(OAuth PKCE)、AIキーは利用者の端末、プロジェクトはIndexedDB+利用者が選んだ保存先(自分のGitHubリポジトリ/PCのフォルダ。`js/core/sync.js` を必ず経由)。運営側にデータを持たせる変更をしない。APIキー・トークンは保存先に書き出さない。
 - ビルドツール・フレームワーク・CDNを増やさない(素のHTML/CSS/ESモジュール)。
 - **設計書(`js/sdd/spec.js`)が唯一の基準**。構築・テスト・評価は確定した版の設計書から行い、会話や画面の状態から直接組織を書き換えない。
 - Genesys Cloud API は `js/core/gcApi.js`、AI は `js/core/ai.js` を必ず経由する。

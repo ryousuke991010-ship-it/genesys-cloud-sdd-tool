@@ -45,7 +45,18 @@ AVAは Genesys 公式の [genesys-ava-skills](https://github.com/purecloudlabs/g
 |---|---|---|
 | Genesys Cloudのログイン | Genesys Cloud 自身 | OAuth(PKCE)でGenesysの画面にログイン。アプリはパスワードを扱わず、操作できる範囲は本人のロールのまま |
 | AIのAPIキー | 利用者の端末(localStorage) | 各自が発行したキー(BYOK)を、各AIのAPIにだけ直接送る |
-| 業務プロジェクト(会話・設計書・記録) | 利用者の端末(IndexedDB) | 設定画面から JSON で書き出し/読み込み(バックアップ・端末移行・共有) |
+| 業務プロジェクト(会話・設計書・記録) | 利用者が選ぶ保存先(下記)+ 作業用コピーとしてブラウザ(IndexedDB) | どの保存先でも運営側には届かない。JSONの書き出し/読み込みも可 |
+
+### データの保存先(設定画面で選ぶ)
+| 保存先 | 特徴 |
+|---|---|
+| **GitHubリポジトリ(おすすめ)** | 自分のリポジトリにプロジェクト1つ=JSONファイル1つで保存。変更のたびにコミットされ履歴が残る。同じリポジトリでチーム共有・別PCで続きから作業。トークンは対象リポジトリだけ・Contents: Read and write の fine-grained token を推奨 |
+| PCのフォルダ | 指定フォルダに自動保存(Chrome/Edge)。OneDrive・Googleドライブの同期フォルダを選べばクラウドにも残る |
+| このブラウザだけ | 設定不要のお試し向け。閲覧データの削除や別PCでは見えない |
+
+- 変更は数秒まとめてから保存先に書き出し、起動時に保存先の方が新しいものを取り込む(更新日時で判断。2台で同時に同じプロジェクトを編集すると、後から保存した方が残る)。
+- 上部の「保存: …」ボタンで状態を確認・今すぐ保存・フォルダへのアクセス再開ができる。
+- ブラウザには、容量不足の時にデータを消さないよう永続化を申請している。
 
 置き場所は Cloudflare Workers / Pages、GitHub Pages など静的ファイルを置ければどこでも動きます(genesys-cloud-toolと同じ方式)。
 
@@ -60,7 +71,7 @@ AVAは Genesys 公式の [genesys-ava-skills](https://github.com/purecloudlabs/g
 
 ```
 index.html / app.js / style.css   画面の枠・ルーティング・オレンジ基調のデザイン
-js/core/   genesysAuth(OAuth PKCE) / gcApi(Platform APIラッパー) / ai(Claude・OpenAI・Gemini) / store(IndexedDB) / ui
+js/core/   genesysAuth(OAuth PKCE) / gcApi(Platform APIラッパー) / ai(Claude・OpenAI・Gemini) / store(IndexedDB) / sync(保存先: GitHub・フォルダ) / ui
 js/sdd/    spec(設計書の形・検査・差分・シミュレーター) / skills(スキル一覧とAIへの知識) / prompts(工程ごとのAI指示)
            builder(計画・構築・検証) / flowYaml(着信フロー・ボットフローのYAML) / ava(AVAの定義・公開・会話テスト)
 knowledge/ AIに渡す公式ナレッジ(genesys-ava-skills のクイックガイド, MIT)

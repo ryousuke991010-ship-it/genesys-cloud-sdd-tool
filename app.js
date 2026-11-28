@@ -4,7 +4,8 @@ import { hasPendingWrites } from './js/core/gcApi.js';
 import { isBusy, setBusy, navigate, hooks } from './js/core/appState.js';
 import { listProjects, loadSettings } from './js/core/store.js';
 import { configuredProviders, PROVIDERS } from './js/core/ai.js';
-import { escapeHtml, confirmDialog } from './js/core/ui.js';
+import { escapeHtml, confirmDialog, toast } from './js/core/ui.js';
+import { initSync, onSyncChange, getSyncState, resumeFolderAccess, flush, MODES } from './js/core/sync.js';
 import { renderHome, openNewProjectDialog } from './js/views/home.js';
 import { renderProject } from './js/views/project.js';
 import { renderSettings, openConnectDialog } from './js/views/settings.js';
@@ -19,6 +20,10 @@ async function canLeave() {
     okLabel: '移動する', danger: true
   });
 }
+
+/* 画面の切り替えは1つずつ順番に行う(起動中にURLが変わっても、遅く終わった描画が新しい画面を上書きしない) */
+let routeQueue = Promise.resolve();
+function enqueueRoute() { routeQueue = routeQueue.then(route, route); return routeQueue; }
 
 let lastHash = location.hash;
 async function route() {
@@ -75,8 +80,41 @@ function refreshChrome() {
   btn.textContent = st.connected ? '切断' : 'Genesys Cloudに接続';
 }
 
-function start() {
+function refreshSyncPill(st = getSyncState()) {
+  const pill = document.getElementById('syncPill');
+  const mark = { ok: ' ✓', pending: ' …', saving: ' …', error: ' ⚠', needsPermission: ' ⚠' }[st.status] || '';
+  pill.textContent = `保存: ${MODES[st.mode].label}${st.mode === 'browser' ? '' : mark}`;
+  pill.title = st.message || 'データの保存先(設定画面で変更できます)';
+  pill.classList.toggle('pill-ok', st.status === 'ok');
+  pill.classList.toggle('pill-warn', st.status === 'error' || st.status === 'needsPermission');
+}
+
+async function onSyncPill() {
+  const st = getSyncState();
+  try {
+    if (st.status === 'needsPermission') {
+      const r = await resumeFolderAccess();
+      toast(r.pulled ? `保存先から${r.pulled}件を取り込みました` : '保存先へのアクセスを再開しました', 'success');
+      await refreshNav();
+      if (location.hash === '' || location.hash === '#/') enqueueRoute();
+    } else if (st.status === 'error' || st.status === 'pending') {
+      await flush();
+      const now = getSyncState();
+      toast(now.status === 'ok' ? '保存先に保存しました' : now.message, now.status === 'ok' ? 'success' : 'error');
+    } else {
+      navigate('#/settings');
+    }
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function start() {
   hooks.refreshNav = refreshNav;
+  onSyncChange(refreshSyncPill);
+  refreshSyncPill();
+  document.getElementById('syncPill').addEventListener('click', onSyncPill);
+  await initSync();
   restoreSession();
   onAuthChange(refreshChrome);
   refreshChrome();
@@ -89,8 +127,8 @@ function start() {
   });
   document.getElementById('newProjectBtn').addEventListener('click', () => openNewProjectDialog());
   document.getElementById('settingsBtn').addEventListener('click', () => navigate('#/settings'));
-  window.addEventListener('hashchange', route);
-  route();
+  window.addEventListener('hashchange', enqueueRoute);
+  enqueueRoute();
 }
 
 if (!handleOAuthCallback()) start();

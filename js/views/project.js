@@ -11,6 +11,7 @@ import { loadAvaGuide, needsAvaKnowledge, SKILLS } from '../sdd/skills.js';
 import { AvaSession, publishVersion } from '../sdd/ava.js';
 import { callFlowYaml, callFlowKinds, botFlowYaml, callFlowName } from '../sdd/flowYaml.js';
 import { PHASES } from './phases.js';
+import { storageSettings } from '../core/sync.js';
 
 export async function renderProject(container, id, { setTitle }) {
   let project = await getProject(id);
@@ -89,7 +90,7 @@ export async function renderProject(container, id, { setTitle }) {
     container.querySelector('#deletePrj').addEventListener('click', async () => {
       const ok = await confirmDialog({
         title: 'プロジェクトの削除',
-        bodyHtml: `<p>「${escapeHtml(project.name)}」の会話・設計書・記録をこの端末から削除します。<br>Genesys Cloudに構築済みの設定は<strong>削除されません</strong>。</p>`,
+        bodyHtml: `<p>「${escapeHtml(project.name)}」の会話・設計書・記録をこの端末${storageSettings().mode === 'github' ? 'とGitHubの保存先(履歴には残ります)' : storageSettings().mode === 'folder' ? 'と保存先のフォルダ' : ''}から削除します。<br>Genesys Cloudに構築済みの設定は<strong>削除されません</strong>。</p>`,
         okLabel: '削除する', danger: true, requireText: project.name
       });
       if (!ok) return;
