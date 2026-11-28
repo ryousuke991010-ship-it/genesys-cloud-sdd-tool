@@ -1,5 +1,5 @@
 /* ヒアリング → 設計 → 構築 → テスト → 評価 → 変更(v2) の一連の流れ */
-const { launch, seedConnected, assert } = require('./helpers');
+const { launch, seedConnected, assert, mockGenesys } = require('./helpers');
 
 exports.name = '業務プロジェクトのライフサイクル';
 
@@ -37,33 +37,10 @@ exports.run = async () => {
       await route.fulfill({ json: { content: [{ type: 'text', text }], stop_reason: 'end_turn' } });
     });
 
-    const created = [];
-    const store = { skills: [], wrapupcodes: [], queues: [], schedules: [], schedulegroups: [] };
-    await page.route('https://api.mypurecloud.jp/**', async route => {
-      const req = route.request();
-      const u = new URL(req.url());
-      const m = u.pathname.match(/\/api\/v2\/(?:routing|architect)\/(skills|wrapupcodes|queues|schedules|schedulegroups)(?:\/([^/]+))?$/);
-      if (!m) return route.fulfill({ status: 404, json: { message: 'not mocked ' + u.pathname } });
-      const [, coll, id] = m;
-      if (req.method() === 'GET' && !id) {
-        const name = u.searchParams.get('name');
-        return route.fulfill({ json: { entities: store[coll].filter(e => e.name.startsWith(name || '')), pageCount: 1 } });
-      }
-      if (req.method() === 'GET' && id) {
-        const e = store[coll].find(x => x.id === id);
-        return e ? route.fulfill({ json: e }) : route.fulfill({ status: 404, json: { message: 'nf' } });
-      }
-      if (req.method() === 'POST') {
-        const b = JSON.parse(req.postData());
-        const e = { ...b, id: `${coll}-${store[coll].length + 1}` };
-        store[coll].push(e);
-        created.push(`${coll}:${b.name}`);
-        return route.fulfill({ json: e });
-      }
-      return route.fulfill({ status: 405, json: {} });
-    });
+    const store = await mockGenesys(page);
     // 既存のキューが1つある(上書きしないことを確認する)
     store.queues.push({ id: 'q-existing', name: '会員_登録変更' });
+    const created = () => store.writes.filter(w => w.startsWith('POST'));
 
     await seedConnected(page, url);
     await page.waitForSelector('.hero');
@@ -110,14 +87,19 @@ exports.run = async () => {
     await page.waitForSelector('text=件を新しく作成します');
     const planText = await page.textContent('#planArea');
     assert(planText.includes('既存(触らない)'), '既存キューは触らない計画');
-    assert(planText.includes('Architectで手動'), 'IVRは手動');
+    assert(planText.includes('会員サポート_着信_営業時間内') && planText.includes('会員サポート_着信_休業日'), '着信フロー3本を作る計画');
+    assert(!planText.includes('手作業'), '電話番号もボットも無いので手作業は無い');
     await page.click('#runBtn');
     await page.waitForSelector('.modal');
     await page.click('.modal [data-act="ok"]');
-    await page.waitForSelector('#resultArea .badge-success');
-    assert(!created.includes('queues:会員_登録変更'), '既存キューを作り直さない');
-    assert(created.includes('queues:会員_解約'), '新しいキューを作る');
-    assert(created.includes('schedulegroups:会員サポート_営業時間'), 'スケジュールグループを作る');
+    await page.waitForSelector('#resultArea .badge-success', { timeout: 60000 });
+    assert(store.queues.filter(q => q.name === '会員_登録変更').length === 1, '既存キューを作り直さない');
+    assert(store.queues.some(q => q.name === '会員_解約'), '新しいキューを作る');
+    assert(store.schedulegroups.some(g => g.name === '会員サポート_営業時間'), 'スケジュールグループを作る');
+    assert(store.flows.length === 3 && store.flows.every(f => f.publishedVersion), '着信フロー3本を公開');
+    const openFlow = store.flows.find(f => f.name === '会員サポート_着信_営業時間内').yaml;
+    assert(openFlow.includes('menuTransferToAcd') && openFlow.includes('"digit_2"') && openFlow.includes('"会員_解約"'), `メニューが転送になっている: ${openFlow}`);
+    assert(created().length > 0, '書き込みがある');
     const grp = store.schedulegroups[0];
     assert(grp.openSchedules.length === 1 && grp.holidaySchedules.length === 1, 'グループに営業/休業スケジュールを入れる');
     const sch = store.schedules.find(s => s.name === '会員サポート_平日営業');

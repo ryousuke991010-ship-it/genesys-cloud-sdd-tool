@@ -5,8 +5,11 @@ import { getAuthState, onAuthChange } from '../core/genesysAuth.js';
 import { escapeHtml, spinnerHtml, formatDateTime, toast, confirmDialog, setRunState, renderRichText, newId, downloadJson } from '../core/ui.js';
 import { setBusy, navigate, hooks } from '../core/appState.js';
 import { normalizeSpec, lintSpec, diffSpecs, simulateCall, DAY_LABEL } from '../sdd/spec.js';
-import { hearingSystem, specSystem, testCaseSystem, evaluateSystem } from '../sdd/prompts.js';
-import { buildPlan, executePlan, verifyPlan, flowBuildMemo, TYPE_LABEL } from '../sdd/builder.js';
+import { hearingSystem, specSystem, testCaseSystem, evaluateSystem, avaScenarioSystem, avaUserSimSystem, avaJudgeSystem } from '../sdd/prompts.js';
+import { buildPlan, executePlan, verifyPlan, TYPE_LABEL } from '../sdd/builder.js';
+import { loadAvaGuide, needsAvaKnowledge, SKILLS } from '../sdd/skills.js';
+import { AvaSession, publishVersion } from '../sdd/ava.js';
+import { callFlowYaml, callFlowKinds, botFlowYaml, callFlowName } from '../sdd/flowYaml.js';
 import { PHASES } from './phases.js';
 
 export async function renderProject(container, id, { setTitle }) {
@@ -39,6 +42,11 @@ export async function renderProject(container, id, { setTitle }) {
     }
   }
   const ask = (system, messages) => chat({ settings: loadSettings(), provider: project.provider, system, messages });
+  /** AVAを扱う場面だけ、公式AVAガイドを知識として渡す */
+  async function designExtras(spec) {
+    if (!needsAvaKnowledge(spec, project.messages)) return {};
+    return { ava: true, avaGuide: await loadAvaGuide() };
+  }
 
   function renderShell() {
     const settings = loadSettings();
@@ -111,7 +119,7 @@ export async function renderProject(container, id, { setTitle }) {
     const v = latest();
     const examples = v
       ? ['土曜日も10時〜15時で受け付けたい', '「3」で請求の問い合わせを追加して専用キューに', '年末年始(12/29〜1/3)を休業日にしたい']
-      : ['会員向けの電話窓口。平日9時〜18時、土日祝は休み', '「1」で登録変更、「2」で解約の相談に分けたい', '解約は経験者だけが受けるようにしたい'];
+      : ['会員向けの電話窓口。平日9時〜18時、土日祝は休み', '「1」で登録変更、「2」で解約の相談に分けたい', '解約は経験者だけが受けるようにしたい', 'よくある質問はAVA(AIエージェント)に答えさせたい'];
     body.innerHTML = `
       <section class="card chat-card">
         ${v ? `<div class="banner">設計書 <strong>v${v.version}</strong> が確定済みです。変えたいことをそのまま話しかけてください。会話が終わったら「設計書を更新」で新しい版を作ります。</div>` : ''}
@@ -165,7 +173,7 @@ export async function renderProject(container, id, { setTitle }) {
       renderHearing(body);
       const btn = body.querySelector('#sendBtn');
       const reply = await withAi(btn, 'AIが考えています…', () =>
-        ask(hearingSystem(project, latest()?.spec), project.messages.map(m => ({ role: m.role, content: m.content }))));
+        designExtras(latest()?.spec).then(x => ask(hearingSystem(project, latest()?.spec, x), project.messages.map(m => ({ role: m.role, content: m.content })))));
       awaitingReply = false;
       if (reply && alive) {
         project.messages.push({ role: 'assistant', content: reply, at: Date.now(), provider: project.provider });
@@ -178,7 +186,7 @@ export async function renderProject(container, id, { setTitle }) {
       const convo = project.messages.map(m => ({ role: m.role, content: m.content }));
       if (convo[convo.length - 1]?.role === 'user') convo.push({ role: 'assistant', content: '(承知しました)' });
       convo.push({ role: 'user', content: 'ここまでの会話をもとに、設計書のJSONを作成してください。' });
-      const reply = await withAi(toSpecBtn, '設計書を作成中…', () => ask(specSystem(project, latest()?.spec), convo));
+      const reply = await withAi(toSpecBtn, '設計書を作成中…', async () => ask(specSystem(project, latest()?.spec, await designExtras(latest()?.spec)), convo));
       if (!reply || !alive) return;
       try {
         project.draftSpec = { spec: normalizeSpec(extractJson(reply)), at: Date.now(), provider: project.provider };
@@ -214,6 +222,15 @@ export async function renderProject(container, id, { setTitle }) {
             </div>
           </div>
         </div>
+        ${spec.callRouting.numbers.length ? `<div class="spec-block"><h4>電話番号</h4>${list(spec.callRouting.numbers)}</div>` : ''}
+        ${spec.agents.length ? `<div class="spec-block"><h4>エージェント割り当て</h4><ul class="plain">${spec.agents.map(a => `<li><strong>${escapeHtml(a.email)}</strong><div>${a.skills.map(k => `<span class="tag">${escapeHtml(k.name)} ${escapeHtml(String(k.proficiency))}</span>`).join('')}${a.queues.map(q => `<span class="tag tag-add">${escapeHtml(q)}</span>`).join('')}</div></li>`).join('')}</ul></div>` : ''}
+        ${spec.dataTables.length ? `<div class="spec-block"><h4>データテーブル</h4><ul class="plain">${spec.dataTables.map(t => `<li><strong>${escapeHtml(t.name)}</strong> <span class="muted small">キー「${escapeHtml(t.key)}」+ ${t.columns.map(c => escapeHtml(c.name)).join('・') || '列なし'} / ${t.rows.length}行</span></li>`).join('')}</ul></div>` : ''}
+        ${spec.botFlows.length ? `<div class="spec-block"><h4>ボットフロー</h4><ul class="plain">${spec.botFlows.map(b => `<li><strong>${escapeHtml(b.name)}</strong> <span class="muted small">「${escapeHtml(b.question)}」</span><div>${b.intents.map(i => `<span class="tag" title="${escapeHtml(i.utterances.join(' / '))}">${escapeHtml(i.name)}(${i.utterances.length})</span>`).join('')}</div></li>`).join('')}</ul></div>` : ''}
+        ${spec.ava.map(a => `<div class="spec-block spec-wide"><h4>✨ AVA「${escapeHtml(a.name)}」</h4>
+          <p>${escapeHtml(a.role)}</p>
+          ${a.instructions.length ? `<p class="small muted">ガイドライン</p><ul class="plain small">${a.instructions.map(t => `<li>・${escapeHtml(t)}</li>`).join('')}</ul>` : ''}
+          ${a.guardrails.length ? `<p class="small muted">ガードレール(${escapeHtml(String(a.guardrailThreshold))}回でオペレーターへ)</p><ul class="plain small">${a.guardrails.map(t => `<li>🛡 ${escapeHtml(t)}</li>`).join('')}</ul>` : ''}
+          <p class="small muted">オペレーター接続: ${escapeHtml(a.escalationMessage || '未設定')} / 終了: ${escapeHtml(a.userExitMessage || '未設定')}</p></div>`).join('')}
         ${spec.openQuestions.length ? `<div class="spec-block spec-wide warn-block"><h4>未決事項</h4><ul class="plain">${spec.openQuestions.map(q => `<li>❓ ${escapeHtml(q)}</li>`).join('')}</ul></div>` : ''}
       </div>`;
   }
@@ -329,13 +346,27 @@ export async function renderProject(container, id, { setTitle }) {
   function planTable(items, withResult) {
     const statusBadge = it => {
       if (withResult) {
-        return { created: '<span class="badge badge-success">作成した</span>', skipped: '<span class="badge badge-muted">既存のため触らず</span>', manual: '<span class="badge badge-warn">手動</span>', error: '<span class="badge badge-danger">失敗</span>' }[it.result] || '';
+        return { created: '<span class="badge badge-success">作成した</span>', updated: '<span class="badge badge-success">新しい版を反映</span>', skipped: '<span class="badge badge-muted">既存のため触らず</span>', manual: '<span class="badge badge-warn">手作業</span>', error: '<span class="badge badge-danger">失敗</span>' }[it.result] || '';
       }
-      return { create: '<span class="badge badge-accent">作成する</span>', exists: '<span class="badge badge-muted">既存(触らない)</span>', manual: '<span class="badge badge-warn">Architectで手動</span>', error: '<span class="badge badge-danger">確認できず</span>' }[it.status] || '';
+      return { create: '<span class="badge badge-accent">作成する</span>', update: '<span class="badge badge-accent">新しい版を反映</span>', exists: '<span class="badge badge-muted">既存(触らない)</span>', manual: '<span class="badge badge-warn">手作業</span>', error: '<span class="badge badge-danger">実行しない</span>' }[it.status] || '';
     };
     return `<table class="table"><thead><tr><th>種類</th><th>名前</th><th>${withResult ? '結果' : '計画'}</th><th>補足</th></tr></thead><tbody>
       ${items.map(it => `<tr><td>${escapeHtml(TYPE_LABEL[it.type])}</td><td>${escapeHtml(it.name)}</td><td>${statusBadge(it)}</td><td class="small ${it.error ? 'fail' : 'muted'}">${escapeHtml(it.error || '')}</td></tr>`).join('')}
     </tbody></table>`;
+  }
+
+  function flowPreviewHtml(spec) {
+    const flows = callFlowKinds(spec).map(k => ({ name: callFlowName(spec, k), yaml: callFlowYaml(spec, k) }))
+      .concat(spec.botFlows.map(bf => ({ name: bf.name, yaml: botFlowYaml(bf) })));
+    if (!flows.length) return '';
+    return `<details class="memo"><summary>作成するフローの定義(${flows.length}件・Architect形式)</summary>
+      ${flows.map(f => `<p class="small"><strong>${escapeHtml(f.name)}</strong></p><pre class="code">${escapeHtml(f.yaml)}</pre>`).join('')}</details>`;
+  }
+
+  function manualHtml(items) {
+    const manual = items.filter(i => i.type === 'manual');
+    if (!manual.length) return '';
+    return `<div class="note"><strong>手作業が必要なもの(${manual.length})</strong><ul class="plain small">${manual.map(m => `<li>・<strong>${escapeHtml(m.name)}</strong> — ${escapeHtml(m.error || '')}</li>`).join('')}</ul></div>`;
   }
 
   function renderBuild(body) {
@@ -353,11 +384,14 @@ export async function renderProject(container, id, { setTitle }) {
         <section class="card">
           <h3 class="bulk-col-title">何を作るか</h3>
           <p>設計書 <strong>v${v.version}</strong> の内容を、${gc.connected ? `接続中の組織(${escapeHtml(gc.region)})` : 'Genesys Cloud'}に構築します。</p>
+          <div class="skill-chips">${SKILLS.map(sk => `<span class="tag" title="${escapeHtml(sk.builds)}">${sk.icon} ${escapeHtml(sk.label)}</span>`).join('')}</div>
           <ul class="plain small muted">
-            <li>・同じ名前のものが既にあれば<strong>触りません</strong>(上書き・削除はしない)</li>
+            <li>・他の人やツールが作った同名の設定は<strong>触りません</strong>(上書き・削除はしない)</li>
+            <li>・このアプリが作ったフロー・AVA・コールルーティングだけは、変更時に<strong>新しい版</strong>として反映します(過去の版は残ります)</li>
+            <li>・AVAはまず<strong>テスト用に公開</strong>します。本番公開はテスト工程で会話を確かめてから行います</li>
             <li>・スケジュールには業務名が先頭に付きます(例: ${escapeHtml(v.spec.business.name)}_平日営業)</li>
-            <li>・着信フロー(IVR)はAPIで作れないため、Architectでの手順メモを出します</li>
           </ul>
+          ${flowPreviewHtml(v.spec)}
           ${project.draftSpec ? '<p class="note warn">未確定の設計書の案があります。案の内容は構築されません(確定済みの版だけが対象)。</p>' : ''}
         </section>
         <section class="card">
@@ -369,12 +403,12 @@ export async function renderProject(container, id, { setTitle }) {
           </div>
         </section>
       </div>
-      <section class="card" id="resultCard" ${b ? '' : 'hidden'}>
-        <div class="card-head"><h3 class="card-title">前回の構築結果</h3><span class="muted small" id="resultMeta">${b ? `設計書 v${b.version} · ${formatDateTime(b.at)}` : ''}</span></div>
-        <div id="resultArea">${b ? planTable(b.items, true) : ''}</div>
-        <details class="memo" ${b ? 'open' : ''}><summary>Architectでの着信フロー構築メモ</summary><pre class="code" id="memo">${escapeHtml(flowBuildMemo(v.spec))}</pre></details>
+      ${b ? `<section class="card" id="resultCard">
+        <div class="card-head"><h3 class="card-title">前回の構築結果</h3><span class="muted small" id="resultMeta">設計書 v${b.version} · ${formatDateTime(b.at)}</span></div>
+        <div id="resultArea">${planTable(b.items, true)}</div>
+        ${manualHtml(b.items)}
         <div class="bulk-run"><button type="button" class="btn btn-accent" id="toTest">テストへ進む →</button></div>
-      </section>`;
+      </section>` : ''}`;
 
     const planBtn = body.querySelector('#planBtn');
     const runBtn = body.querySelector('#runBtn');
@@ -382,10 +416,10 @@ export async function renderProject(container, id, { setTitle }) {
     const refreshRun = () => setRunState(runBtn,
       !gc.connected ? 'Genesys Cloudに接続する'
         : !plan ? '先に計画を作成する'
-          : !plan.some(i => i.status === 'create') ? '作成するものがありません' : '');
+          : !plan.some(i => i.status === 'create' || i.status === 'update') ? '作成・反映するものがありません' : '');
     setRunState(planBtn, gc.connected ? '' : 'Genesys Cloudに接続する');
     refreshRun();
-    body.querySelector('#toTest').addEventListener('click', () => go('test'));
+    body.querySelector('#toTest')?.addEventListener('click', () => go('test'));
 
     planBtn.addEventListener('click', async () => {
       plan = null;
@@ -393,12 +427,14 @@ export async function renderProject(container, id, { setTitle }) {
       planBtn.disabled = true;
       setBusy(true);
       try {
-        const items = await buildPlan(v.spec, msg => { if (alive) planArea.innerHTML = `<p>${spinnerHtml(msg)}</p>`; });
+        const knownIds = new Set(project.builds.flatMap(x => x.items.map(i => i.id)).filter(Boolean));
+        const items = await buildPlan(v.spec, msg => { if (alive) planArea.innerHTML = `<p>${spinnerHtml(msg)}</p>`; }, knownIds);
         if (!alive) return;
         plan = items;
         const c = items.filter(i => i.status === 'create').length;
+        const u = items.filter(i => i.status === 'update').length;
         const errs = items.filter(i => i.status === 'error').length;
-        planArea.innerHTML = `<p><strong>${c}件</strong>を新しく作成します。${errs ? `<span class="fail">${errs}件は組織の状態を確認できませんでした(実行対象外)。</span>` : ''}</p>${planTable(items, false)}`;
+        planArea.innerHTML = `<p><strong>${c}件</strong>を新しく作成${u ? `、<strong>${u}件</strong>に新しい版を反映` : ''}します。${errs ? `<span class="fail">${errs}件は前提が足りないため実行しません(補足を確認)。</span>` : ''}</p>${planTable(items, false)}`;
       } catch (e) {
         planArea.innerHTML = `<p class="fail">${escapeHtml(e.message)}</p>`;
       } finally {
@@ -411,13 +447,15 @@ export async function renderProject(container, id, { setTitle }) {
       // 確認した時点の計画と設計書を確定させて実行する(実行中に画面の状態が変わっても対象は変わらない)
       const items = plan.map(i => ({ ...i }));
       const spec = v.spec;
-      const targets = items.filter(i => i.status === 'create');
+      const targets = items.filter(i => i.status === 'create' || i.status === 'update');
+      const updates = targets.filter(t => t.status === 'update');
       const ok = await confirmDialog({
-        title: `Genesys Cloudに${targets.length}件を作成します`,
+        title: `Genesys Cloudに${targets.length}件を構築します`,
         bodyHtml: `<p>接続先: <strong>${escapeHtml(gc.region)}</strong> / 設計書 v${v.version}</p>
-          <ul class="confirm-list">${targets.map(t => `<li>${escapeHtml(TYPE_LABEL[t.type])}「${escapeHtml(t.name)}」</li>`).join('')}</ul>
-          <p class="muted small">既存のものは変更しません。作成したものはこのアプリからは削除できません(Genesys Cloudの管理画面で削除します)。</p>`,
-        okLabel: `${targets.length}件を作成する`,
+          <ul class="confirm-list">${targets.map(t => `<li>${t.status === 'update' ? '<strong>[新しい版]</strong> ' : ''}${escapeHtml(TYPE_LABEL[t.type])}「${escapeHtml(t.name)}」</li>`).join('')}</ul>
+          ${updates.length ? `<p class="note warn">「新しい版」の${updates.length}件は、このアプリが前に作ったものを設計書どおりに更新します(フロー・AVAは過去の版が残り、Genesys Cloudの画面で戻せます)。電話番号の割り当てを変えると、すぐに着信の流れが変わります。</p>` : ''}
+          <p class="muted small">他で作られた設定は変更しません。作成したものはこのアプリからは削除できません(Genesys Cloudの管理画面で削除します)。</p>`,
+        okLabel: `${targets.length}件を構築する`,
         requireText: targets.length >= 20 ? String(targets.length) : ''
       });
       if (!ok) return;
@@ -489,9 +527,11 @@ export async function renderProject(container, id, { setTitle }) {
           <button type="button" class="btn btn-primary" id="genCases">AIでシナリオを作成${cases.length ? '(置き換え)' : ''}</button>
           <button type="button" class="btn btn-accent" id="toEval">評価へ進む →</button>
         </div>
-      </section>`;
+      </section>
+      <div id="avaArea"></div>`;
 
     wireSimulator(body, v.spec);
+    mountAvaTests(body.querySelector('#avaArea'), v, b);
     body.querySelector('#toEval').addEventListener('click', () => go('evaluate'));
     const verifyBtn = body.querySelector('#verifyBtn');
     setRunState(verifyBtn, !b ? '先に構築する' : !gc.connected ? 'Genesys Cloudに接続する' : '');
@@ -547,6 +587,148 @@ export async function renderProject(container, id, { setTitle }) {
     });
   }
 
+  /* ---------- AVAの会話テスト(公開済みのテスト版と実際に会話する) ---------- */
+  function mountAvaTests(area, v, b) {
+    const avas = (b?.items || []).filter(i => i.type === 'ava' && i.id && i.version);
+    if (!avas.length) {
+      if (v.spec.ava.length) area.innerHTML = '<section class="card"><h3 class="card-title">✨ AVAの会話テスト</h3><p class="muted">AVAを構築(テスト公開)すると、ここで実際に会話して確かめられます。</p></section>';
+      return;
+    }
+    project.avaTests = project.avaTests || {};
+    area.innerHTML = avas.map((a, idx) => {
+      const t = project.avaTests[a.name];
+      const sc = t?.version === a.version ? t.scenarios : [];
+      const passed = sc.filter(x => x.pass === true).length;
+      const published = (project.avaPublished || []).find(p => p.id === a.id && p.version === a.version);
+      return `<section class="card" data-ava="${idx}">
+        <div class="card-head"><h3 class="card-title">✨ AVA「${escapeHtml(a.name)}」 v${escapeHtml(a.version)}</h3>
+          <span class="badge ${published ? 'badge-success' : 'badge-warn'}">${published ? '本番公開済み' : 'テスト公開中'}</span></div>
+        <div class="bulk-layout">
+          <div>
+            <h4 class="bulk-col-title">お客様として話してみる</h4>
+            <div class="chat-log ava-log" data-log><p class="muted small">「会話を始める」を押すと、テスト版のAVAが挨拶します。</p></div>
+            <form class="composer" data-form><textarea rows="2" data-input placeholder="お客様として話しかける"></textarea>
+              <div class="composer-actions"><button type="button" class="btn btn-ghost" data-start>会話を始める</button><button type="submit" class="btn btn-primary" data-send>送信</button></div></form>
+          </div>
+          <div>
+            <h4 class="bulk-col-title">AIによる自動テスト ${sc.length ? `<span class="muted small">合格 ${passed}/${sc.length}</span>` : ''}</h4>
+            <p class="small muted">AIがお客様役になってシナリオごとに会話し、期待どおりかを採点します(genesys-ava-skills の評価の考え方)。</p>
+            ${sc.length ? `<table class="table"><thead><tr><th>シナリオ</th><th>判定</th></tr></thead><tbody>${sc.map(x => `<tr><td><details><summary>${escapeHtml(x.title)}</summary>
+              <p class="small muted">期待: ${escapeHtml(x.expected)}</p>${(x.transcript || []).map(m => `<p class="small"><strong>${m.who === 'user' ? 'お客様' : 'AVA'}:</strong> ${escapeHtml(m.text)}</p>`).join('')}</details></td>
+              <td class="small ${x.pass === true ? 'success' : x.pass === false ? 'fail' : 'muted'}">${x.pass === true ? '✓ 合格' : x.pass === false ? '✕ 不合格' : '未実施'}<br>${escapeHtml(x.reason || '')}</td></tr>`).join('')}</tbody></table>` : ''}
+            <div class="bulk-run">
+              <button type="button" class="btn btn-ghost" data-gen>シナリオを作成${sc.length ? '(置き換え)' : ''}</button>
+              <button type="button" class="btn btn-primary" data-run>自動テストを実行</button>
+            </div>
+          </div>
+        </div>
+        <div class="bulk-run"><button type="button" class="btn btn-accent" data-prod>本番に公開する</button></div>
+      </section>`;
+    }).join('');
+
+    area.querySelectorAll('[data-ava]').forEach(card => {
+      const a = avas[Number(card.dataset.ava)];
+      const specAva = v.spec.ava.find(x => x.name === a.name) || {};
+      const log = card.querySelector('[data-log]');
+      const input = card.querySelector('[data-input]');
+      const sendBtn = card.querySelector('[data-send]');
+      const startBtn = card.querySelector('[data-start]');
+      let session = null;
+      const addMsg = (who, text) => {
+        if (log.querySelector('p.muted')) log.innerHTML = '';
+        log.insertAdjacentHTML('beforeend', `<div class="msg msg-${who === 'user' ? 'user' : 'assistant'}"><div class="msg-body">${renderRichText(text || '(返答なし)')}</div></div>`);
+        log.scrollTop = log.scrollHeight;
+      };
+      const gcOk = getAuthState().connected;
+      setRunState(startBtn, gcOk ? '' : 'Genesys Cloudに接続する');
+      setRunState(sendBtn, '会話を始める');
+      startBtn.addEventListener('click', async () => {
+        await withAi(startBtn, '接続中…', async () => {
+          session = new AvaSession(a.id, a.version, specAva.language || a.language || 'ja-jp');
+          log.innerHTML = '';
+          const r = await session.start();
+          addMsg('ava', r.text);
+          setRunState(sendBtn, '');
+        });
+      });
+      card.querySelector('[data-form]').addEventListener('submit', async e => {
+        e.preventDefault();
+        const text = input.value.trim();
+        if (!text || !session) return;
+        input.value = '';
+        addMsg('user', text);
+        await withAi(sendBtn, 'AVAが応答中…', async () => {
+          const r = await session.turn(text);
+          addMsg('ava', r.text + (r.next === 'Exit' || r.next === 'Disconnect' ? `\n\n(会話終了: ${r.reason || r.next})` : ''));
+          if (session.ended) setRunState(sendBtn, 'もう一度「会話を始める」');
+        });
+      });
+
+      const hasAi = configuredProviders(loadSettings()).includes(project.provider);
+      const genBtn = card.querySelector('[data-gen]');
+      const runBtn = card.querySelector('[data-run]');
+      const current = () => (project.avaTests[a.name]?.version === a.version ? project.avaTests[a.name].scenarios : []);
+      setRunState(genBtn, hasAi ? '' : 'AIを設定する');
+      setRunState(runBtn, !hasAi ? 'AIを設定する' : !gcOk ? 'Genesys Cloudに接続する' : !current().length ? '先にシナリオを作成する' : '');
+      genBtn.addEventListener('click', async () => {
+        const reply = await withAi(genBtn, 'シナリオを作成中…', () => ask(avaScenarioSystem(), [{ role: 'user', content: `次のAVAのテストシナリオを5件前後作ってください。\n\`\`\`json\n${JSON.stringify(specAva, null, 2)}\n\`\`\`` }]));
+        if (!reply || !alive) return;
+        const list = extractJson(reply)?.scenarios;
+        if (!Array.isArray(list) || !list.length) { toast('AIの返答にシナリオが含まれていませんでした。もう一度お試しください。', 'error'); return; }
+        project.avaTests[a.name] = { version: a.version, scenarios: list.map(x => ({ title: String(x.title || ''), persona: String(x.persona || ''), goal: String(x.goal || ''), expected: String(x.expected || ''), pass: null })) };
+        await save();
+        renderTest(container.querySelector('#phaseBody'));
+      });
+      runBtn.addEventListener('click', async () => {
+        const scenarios = current();
+        await withAi(runBtn, '自動テスト中…', async () => {
+          for (const [i, sc] of scenarios.entries()) {
+            runBtn.innerHTML = spinnerHtml(`自動テスト中… (${i + 1}/${scenarios.length})`);
+            const ses = new AvaSession(a.id, a.version, specAva.language || 'ja-jp');
+            const transcript = [];
+            const first = await ses.start();
+            transcript.push({ who: 'ava', text: first.text });
+            for (let turn = 0; turn < 6 && !ses.ended; turn++) {
+              const simMsgs = transcript.map(m => ({ role: m.who === 'ava' ? 'user' : 'assistant', content: m.text || '(無言)' }));
+              const said = (await ask(avaUserSimSystem(sc), simMsgs)).trim();
+              if (!said || said.includes('[END]')) break;
+              transcript.push({ who: 'user', text: said });
+              const r = await ses.turn(said);
+              transcript.push({ who: 'ava', text: r.text + (ses.ended ? `(会話終了: ${r.reason || r.next})` : '') });
+            }
+            const verdict = extractJson(await ask(avaJudgeSystem(), [{ role: 'user', content: `# シナリオ\n${JSON.stringify(sc)}\n\n# 会話記録\n${transcript.map(m => `${m.who === 'user' ? 'お客様' : 'AVA'}: ${m.text}`).join('\n')}` }]));
+            Object.assign(sc, { transcript, pass: verdict?.pass === true, reason: String(verdict?.reason || '') });
+            await save();
+          }
+        });
+        if (alive && project.phase === 'test') renderTest(container.querySelector('#phaseBody'));
+      });
+
+      const prodBtn = card.querySelector('[data-prod]');
+      const sc = current();
+      const failed = sc.filter(x => x.pass === false).length;
+      setRunState(prodBtn, !gcOk ? 'Genesys Cloudに接続する' : !sc.length || sc.some(x => x.pass === null) ? '自動テストを実行する' : '');
+      prodBtn.addEventListener('click', async () => {
+        const ok = await confirmDialog({
+          title: `AVA「${a.name}」v${a.version} を本番に公開します`,
+          bodyHtml: `<p>本番公開(ProductionReady)すると、この版を呼び出しているボットフローの実際のお客様に使われます。</p>
+            <p>自動テスト: 合格 ${sc.length - failed}/${sc.length}${failed ? ` <span class="fail">(不合格 ${failed}件)</span>` : ''}</p>
+            <p class="muted small">公開後も、設計書を直して構築すれば新しい版を作れます。</p>`,
+          okLabel: '本番に公開する', danger: true, requireText: a.name
+        });
+        if (!ok) return;
+        await withAi(prodBtn, '公開中…', async () => {
+          const job = await publishVersion(a.id, a.version, 'ProductionReady', msg => { prodBtn.innerHTML = spinnerHtml(msg); });
+          if (job.status !== 'Succeeded') throw new Error(`本番公開に失敗しました: ${(job.errors || []).map(e => e.message).join(' / ') || job.status}`);
+          project.avaPublished = [...(project.avaPublished || []), { id: a.id, name: a.name, version: a.version, at: Date.now() }];
+          await save();
+          toast(`AVA「${a.name}」v${a.version} を本番に公開しました`, 'success');
+        });
+        if (alive && project.phase === 'test') renderTest(container.querySelector('#phaseBody'));
+      });
+    });
+  }
+
   function verifyHtml(vr) {
     const ok = vr.results.filter(r => r.ok === true).length;
     const ng = vr.results.filter(r => r.ok === false).length;
@@ -569,7 +751,7 @@ export async function renderProject(container, id, { setTitle }) {
         <div class="metrics">
           ${metric('設計書', v ? `v${v.version}` : '—', v ? formatDateTime(v.at) : '未確定')}
           ${metric('検査の指摘', v ? issues.length : '—', v ? `要修正 ${issues.filter(i => i.level === 'error').length}` : '')}
-          ${metric('構築', b ? `${b.items.filter(i => i.result === 'created' || i.result === 'skipped').length}/${b.items.filter(i => i.type !== 'flow').length}` : '—', b ? `v${b.version}を構築` : '未構築')}
+          ${metric('構築', b ? `${b.items.filter(i => ['created', 'updated', 'skipped'].includes(i.result)).length}/${b.items.filter(i => i.type !== 'manual').length}` : '—', b ? `v${b.version}を構築` : '未構築')}
           ${metric('テスト', cases.length ? `${cases.filter(c => c.status === 'pass').length}/${cases.length}` : '—', cases.length ? `不合格 ${cases.filter(c => c.status === 'fail').length}` : '未作成')}
         </div>
         <div class="bulk-run"><button type="button" class="btn btn-primary" id="evalBtn">AIで評価する</button></div>
@@ -591,7 +773,9 @@ export async function renderProject(container, id, { setTitle }) {
         lint: issues,
         build: b ? b.items.map(i => ({ type: i.type, name: i.name, result: i.result, error: i.error })) : null,
         verify: project.lastVerify?.results || null,
-        tests: cases.map(c => ({ title: c.title, expected: c.expected, status: c.status, memo: c.memo }))
+        tests: cases.map(c => ({ title: c.title, expected: c.expected, status: c.status, memo: c.memo })),
+        avaTests: Object.entries(project.avaTests || {}).map(([name, t]) => ({ name, version: t.version, results: t.scenarios.map(x => ({ title: x.title, pass: x.pass, reason: x.reason })) })),
+        avaPublished: project.avaPublished || []
       };
       const reply = await withAi(evalBtn, '評価中…', () => ask(evaluateSystem(), [{
         role: 'user', content: `# ヒアリングの会話\n${convo || '(なし)'}\n\n# 設計書・構築・テストの状況\n\`\`\`json\n${JSON.stringify(payload, null, 2)}\n\`\`\``

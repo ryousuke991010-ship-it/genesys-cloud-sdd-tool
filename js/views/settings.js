@@ -43,7 +43,7 @@ export function renderSettings(container, { onChange }) {
         <ol>
           <li>Genesys Cloudの「管理 → OAuth」で、付与タイプ「<strong>Code Authorization</strong>」(PKCE)のクライアントを作成</li>
           <li>Authorized redirect URI に <code>${escapeHtml(redirect)}</code> を登録</li>
-          <li>スコープ: <code>routing</code> <code>architect</code> <code>users:readonly</code>(構築する範囲に合わせて)</li>
+          <li>スコープ: <code>routing</code> <code>architect</code> <code>users</code> <code>telephony:readonly</code> <code>agentic-virtualagents</code>(構築する範囲に合わせて。ログインする人のロールにも同じ権限が必要です)</li>
           <li>作成されたクライアントIDを下に貼り付け</li>
         </ol>
       </details>

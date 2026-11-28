@@ -77,6 +77,9 @@ async function request(method, path, body, attempt = 0) {
 
 export const gcGet = path => request('GET', path);
 
+/** 読み取りのためのPOST(検索API・validateOnly等)。組織を変更しないので書き込み件数に数えない */
+export const gcQuery = (path, body) => request('POST', path, body);
+
 export async function gcWrite(method, path, body) {
   pendingWrites++;
   try {
@@ -87,13 +90,46 @@ export async function gcWrite(method, path, body) {
 }
 
 /** 名前の完全一致で1件探す。nameクエリは部分一致/前方一致のことがあるため、返った中から完全一致を選ぶ */
-export async function findByName(collectionPath, name) {
-  const data = await gcGet(`${collectionPath}?pageSize=100&name=${encodeURIComponent(name)}`);
+export async function findByName(collectionPath, name, extraQuery = '') {
+  const data = await gcGet(`${collectionPath}?pageSize=100&name=${encodeURIComponent(name)}${extraQuery}`);
   if (!data || !Array.isArray(data.entities)) {
     throw new Error(`${collectionPath} の応答形式が想定と違います(権限不足またはAPI仕様変更の可能性)。`);
   }
   return data.entities.find(e => e?.name === name) || null;
 }
+
+/** 一覧のエンティティ配列を取る(配列でない応答は0件と混同させず例外にする) */
+export async function gcList(path) {
+  const data = await gcGet(path);
+  if (!data || !Array.isArray(data.entities)) throw new Error(`${path.split('?')[0]} の応答形式が想定と違います(権限不足またはAPI仕様変更の可能性)。`);
+  return data.entities;
+}
+
+/**
+ * Architectジョブ(POST /api/v2/flows/jobs)が返す署名付きURLへファイルを置く。
+ * 送り先はGenesysが発行したS3のURLなので、Genesysのトークンは付けない。
+ */
+export async function uploadToPresignedUrl(url, headers, text) {
+  if (!/^https:\/\//.test(url || '')) throw new Error('アップロード先URLが受け取れませんでした。');
+  pendingWrites++;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    let res;
+    try {
+      res = await fetch(url, { method: 'PUT', headers: { ...(headers || {}) }, body: text, signal: controller.signal });
+    } catch (e) {
+      if (e.name === 'AbortError') throw new Error('フロー定義のアップロードがタイムアウトしました。');
+      throw new Error(`フロー定義をアップロードできませんでした: ${e.message}(ブラウザからの送信がブロックされた可能性があります)`);
+    }
+    if (!res.ok) throw new Error(`フロー定義のアップロードに失敗しました (HTTP ${res.status})`);
+  } finally {
+    clearTimeout(timer);
+    pendingWrites--;
+  }
+}
+
+export const sleepMs = sleep;
 
 export async function getMe() {
   return gcGet('/api/v2/users/me?expand=organization');

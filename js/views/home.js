@@ -5,6 +5,7 @@ import { getAuthState } from '../core/genesysAuth.js';
 import { escapeHtml, formatDateTime, newId, toast } from '../core/ui.js';
 import { navigate, hooks } from '../core/appState.js';
 import { PHASES } from './phases.js';
+import { SKILLS, MANUAL_ONLY } from '../sdd/skills.js';
 
 export async function renderHome(container) {
   const projects = await listProjects();
@@ -58,6 +59,12 @@ export async function renderHome(container) {
         <p><strong>まだプロジェクトがありません。</strong><br>「〇〇受付業務」のように、業務の単位で箱を作ってください。</p>
         <button type="button" class="btn btn-primary" data-act="new">最初のプロジェクトを作る</button>
       </div>`}
+    </section>
+
+    <section class="card">
+      <h2 class="card-title">話すだけで作れるもの</h2>
+      <div class="skill-grid">${SKILLS.map(s => `<div class="skill-card"><strong>${s.icon} ${escapeHtml(s.label)}</strong><span class="small muted">${escapeHtml(s.builds)}</span></div>`).join('')}</div>
+      <details class="memo"><summary>手作業になるもの(${MANUAL_ONLY.length})</summary><ul class="plain small muted">${MANUAL_ONLY.map(m => `<li>・${escapeHtml(m)}</li>`).join('')}</ul></details>
     </section>`;
 
   container.querySelectorAll('[data-act="new"]').forEach(b => b.addEventListener('click', () => openNewProjectDialog()));
